@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """Firmen-Finder für die Strecke Würzburg – Aschaffenburg/Hanau – Frankfurt.
 
-Sucht kleine Betriebe in OpenStreetMap, öffnet die öffentliche Webseite
-(inklusive Impressum/Kontakt) und speichert Firma, E-Mail und Geschäftsführer.
-Es werden nur öffentliche Seiten gelesen, mit Pause und Beachtung von robots.txt.
+Sucht Maler, Elektriker, Gebäudereiniger und verwandte Bau- und Montagebetriebe
+in OpenStreetMap, öffnet die öffentliche Webseite (inklusive Impressum/Kontakt)
+und speichert Firma, E-Mail und Geschäftsführer. Andere Branchen werden nicht
+gelesen. Es werden nur öffentliche Seiten gelesen, mit Pause und Beachtung von robots.txt.
 """
 
 from __future__ import annotations
@@ -268,6 +269,67 @@ AMENITY_DE = {
     "driving_school": "Fahrschule",
     "vehicle_inspection": "Prüfstelle",
     "workshop": "Werkstatt",
+}
+
+# Nur diese Betriebe werden gesucht und gespeichert.
+TARGET_CRAFT = {
+    "painter": "Maler / Lackierer",
+    "house_painter": "Maler / Lackierer",
+    "sign_painter": "Maler / Lackierer",
+    "varnisher": "Lackierer",
+    "lacquerer": "Lackierer",
+    "electrician": "Elektriker",
+    "electrician_repair": "Elektroinstallation",
+    "electrical": "Elektriker",
+    "cleaning": "Gebäudereinigung",
+    "window_cleaner": "Gebäudereinigung",
+    "cleaner": "Gebäudereinigung",
+    "building_cleaner": "Gebäudereinigung",
+    "carpet_cleaner": "Gebäudereinigung",
+    "plumber": "Sanitär / Heizung",
+    "hvac": "Heizung / Klima",
+    "heating_engineer": "Heizungsbauer",
+    "tinsmith": "Klempner",
+    "gas_fitter": "Sanitär / Heizung",
+    "carpenter": "Zimmerei / Schreinerei",
+    "roofer": "Dachdecker",
+    "tiler": "Fliesenleger",
+    "plasterer": "Stuckateur",
+    "renderer": "Stuckateur",
+    "dry_wall": "Trockenbau",
+    "drywall": "Trockenbau",
+    "parquet_layer": "Parkettleger",
+    "floorer": "Bodenleger",
+    "insulation": "Dämmtechnik",
+    "glaziery": "Glaserei",
+    "glazier": "Glaserei",
+    "window_construction": "Fensterbau",
+    "metal_construction": "Metallbau",
+    "welder": "Metallbau",
+    "stonemason": "Steinmetz",
+    "mason": "Maurer",
+    "bricklayer": "Maurer",
+    "paver": "Pflasterbau",
+    "scaffolder": "Gerüstbauer",
+    "builder": "Bauunternehmen",
+    "construction": "Bau",
+    "construction_company": "Bauunternehmen",
+    "joinery": "Schreinerei",
+    "joiner": "Schreinerei",
+    "cabinet_maker": "Tischlerei",
+    "solar_panel_installer": "Solarteur",
+    "photovoltaic": "Photovoltaik",
+    "chimney_sweeper": "Schornsteinfeger",
+    "chimney_sweep": "Schornsteinfeger",
+    "sweep": "Schornsteinfeger",
+    "locksmith": "Schlüsseldienst",
+    "interior_work": "Innenausbau",
+    "interior_decorator": "Innenausbau",
+}
+
+TARGET_SHOP = {
+    "glaziery": "Glaserei",
+    "locksmith": "Schlüsseldienst",
 }
 
 EXACT_CHAINS = {
@@ -681,7 +743,32 @@ def is_chain(name: str, brand: str) -> bool:
     return any(company.startswith(chain + " ") or company.startswith(chain + "-") for chain in PREFIX_CHAINS)
 
 
+def tag_values(raw: str) -> list[str]:
+    return [part.strip() for part in (raw or "").replace("|", ";").split(";") if part.strip()]
+
+
+def is_target_trade(tags: dict) -> bool:
+    for value in tag_values(tags.get("craft", "")):
+        if value in TARGET_CRAFT:
+            return True
+    for value in tag_values(tags.get("shop", "")):
+        if value in TARGET_SHOP:
+            return True
+    return False
+
+
+def _alt_pattern(keys: Iterable[str]) -> str:
+    inner = "|".join(sorted(keys, key=len, reverse=True))
+    return f"(^|;)({inner})(;|$)"
+
+
 def branche_label(tags: dict) -> str:
+    for value in tag_values(tags.get("craft", "")):
+        if value in TARGET_CRAFT:
+            return TARGET_CRAFT[value]
+    for value in tag_values(tags.get("shop", "")):
+        if value in TARGET_SHOP:
+            return TARGET_SHOP[value]
     groups = (
         ("craft", CRAFT_DE, "Handwerk"),
         ("amenity", AMENITY_DE, "Dienstleister"),
@@ -1247,23 +1334,15 @@ def _merge_page(result: dict, parsed: dict, final_url: str) -> None:
 
 
 def overpass_query(ort: Ort, radius: int) -> str:
-    shop = "^(" + "|".join(SHOP_DE) + ")$"
-    office = "^(" + "|".join(OFFICE_DE) + ")$"
-    amenity = "^(" + "|".join(AMENITY_DE) + ")$"
     filters = (
-        ('craft', None),
-        ("shop", shop),
-        ("office", office),
-        ("amenity", amenity),
+        ("craft", _alt_pattern(TARGET_CRAFT)),
+        ("shop", _alt_pattern(TARGET_SHOP)),
     )
     lines: list[str] = []
+    around = f"(around:{radius},{ort.lat},{ort.lon})"
     for kind in ("node", "way", "relation"):
         for key, regex in filters:
-            around = f"(around:{radius},{ort.lat},{ort.lon})"
-            if regex:
-                lines.append(f'{kind}["{key}"~"{regex}"]{around};')
-            else:
-                lines.append(f'{kind}["{key}"]{around};')
+            lines.append(f'{kind}["{key}"~"{regex}"]{around};')
     body = "\n  ".join(lines)
     return f"[out:json][timeout:180];\n(\n  {body}\n);\nout center tags;"
 
@@ -1455,10 +1534,12 @@ def run_scan(args: argparse.Namespace) -> int:
     logging.info("Ausgabe: %s", csv_path)
     if args.nacht:
         logging.info("Nachtlauf: höchstens %s neue Webseiten, vorhandene Einträge bleiben", args.limit)
+    logging.info("Sektor: Maler/Lackierer, Elektriker, Gebäudereinigung, Bau- und Montagehandwerk")
     store = LeadStore(csv_path, xlsx_path, resume=not args.neu)
     session = build_session()
     stats = {
         "osm": 0,
+        "ausserhalb": 0,
         "ohne_web": 0,
         "ketten": 0,
         "doppelt": 0,
@@ -1485,6 +1566,9 @@ def run_scan(args: argparse.Namespace) -> int:
                 stats["osm"] += 1
                 tags = element.get("tags") or {}
                 if tags.get("abandoned") == "yes":
+                    continue
+                if not is_target_trade(tags):
+                    stats["ausserhalb"] += 1
                     continue
                 osm_id = f"{element.get('type', '')}/{element.get('id', '')}"
                 website = pick_website(tags)
@@ -1560,8 +1644,9 @@ def run_scan(args: argparse.Namespace) -> int:
 
 def _log_stats(stats: dict[str, int], csv_path: Path, xlsx_path: Path) -> None:
     logging.info(
-        "Fertig. OSM %s, ohne Webseite %s, Ketten %s, Dubletten %s, abgerufen %s, gespeichert %s, Fehler %s",
+        "Fertig. OSM %s, außerhalb Sektor %s, ohne Webseite %s, Ketten %s, Dubletten %s, abgerufen %s, gespeichert %s, Fehler %s",
         stats["osm"],
+        stats["ausserhalb"],
         stats["ohne_web"],
         stats["ketten"],
         stats["doppelt"],
@@ -1588,6 +1673,17 @@ def run_self_test() -> int:
         (not valid_email("privacy@hubspot.com"), "Tracking-Adresse verwerfen"),
         (is_chain("REWE Markt", ""), "Kette erkennen"),
         (not is_chain("Malerbetrieb Müller", ""), "Handwerker behalten"),
+        (is_target_trade({"craft": "painter"}), "Maler zulassen"),
+        (is_target_trade({"craft": "electrician"}), "Elektriker zulassen"),
+        (is_target_trade({"craft": "cleaning"}), "Reinigung zulassen"),
+        (is_target_trade({"craft": "plumber;electrician"}), "Mehrfach-Handwerk zulassen"),
+        (is_target_trade({"craft": "roofer"}), "Bauhandwerk zulassen"),
+        (not is_target_trade({"craft": "bakery"}), "Bäckerei ausschließen"),
+        (not is_target_trade({"shop": "bakery"}), "Einzelhandel ausschließen"),
+        (not is_target_trade({"shop": "paint"}), "Farbenhandel ausschließen"),
+        (not is_target_trade({"amenity": "restaurant"}), "Restaurant ausschließen"),
+        (not is_target_trade({"office": "lawyer"}), "fremde Dienstleister ausschließen"),
+        (branche_label({"craft": "painter"}) == "Maler / Lackierer", "Branchenlabel Maler"),
         (choose_emails(["privat@gmail.com", "info@maler.de"], "https://www.maler.de")[0] == "info@maler.de", "eigene Domain bevorzugen"),
     ]
     html = '<html><a href="mailto:buero@firma.de?subject=Hallo">Mail</a><p>Inhaberin: Sabine Wolf</p></html>'
@@ -1605,7 +1701,8 @@ def run_self_test() -> int:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Sucht kleine Betriebe von Würzburg über Aschaffenburg und Hanau bis Frankfurt "
+            "Sucht Maler, Elektriker, Gebäudereiniger und verwandte Bauhandwerker "
+            "von Würzburg über Aschaffenburg und Hanau bis Frankfurt "
             "und liest Firma, E-Mail und Geschäftsführer von der öffentlichen Webseite."
         )
     )
